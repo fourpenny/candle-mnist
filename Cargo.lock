@@ -396,6 +396,7 @@ dependencies = [
  "hf-hub",
  "image",
  "parquet 49.0.0",
+ "rand",
 ]
 
 [[package]]

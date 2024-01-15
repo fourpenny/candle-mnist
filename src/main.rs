@@ -1,8 +1,9 @@
-use candle_core::{Device, Tensor, DType};
-use candle_nn::{Linear, VarBuilder, VarMap, Optimizer};
+use candle_core::{Device, Tensor, DType, D};
+use candle_nn::{VarBuilder, VarMap, Optimizer, loss, ops};
 use candle_datasets::vision::Dataset;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use parquet::file::reader::SerializedFileReader;
+use rand::prelude::*;
 
 fn get_mnist_dataset() -> Result<Dataset, Box<dyn std::error::Error>> {
     let dataset_id = "mnist".to_string();
@@ -71,52 +72,70 @@ fn get_mnist_dataset() -> Result<Dataset, Box<dyn std::error::Error>> {
     return Ok(mnist);
 }
 
+//  Train the input type of neural network to classify the given dataset.
+//  We also test the accuracy of the network at the end of each training epoch.
 fn train_loop<M: candle_tut::models::Model>(
-    dataset: candle_datasets::vision::Dataset,
-    model: M
+    dataset: candle_datasets::vision::Dataset
 ) -> Result<(), Box<dyn std::error::Error>> {
-//    See the example: https://github.com/huggingface/candle/blob/main/candle-examples/examples/mnist-training/main.rs#L174
     let device = Device::cuda_if_available(0)?;
 
     const LR: f64 = 0.05;
+    const EPOCHS: usize = 20;
+    const BSIZE: usize = 64;
 
     let train_labels = dataset.train_labels;
     let train_images = dataset.train_images.to_device(&device)?;
     let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&device)?;
 
-    let mut varmap = VarMap::new();
+    let varmap = VarMap::new();
     let vs = VarBuilder::from_varmap(&varmap, DType::F32, &device);
     let model = M::new(vs.clone())?;
-//    Here I'll need to create the optimizer and loss function
-    let mut sgd = candle_nn::optim::SGD::new(varmap.all_vars(), LR );
+
+    let mut sgd = candle_nn::optim::SGD::new(varmap.all_vars(), LR )?;
     let test_images = dataset.test_images.to_device(&device)?;
     let test_labels = dataset.test_labels.to_dtype(DType::U32)?.to_device(&device)?;
-//    Then do each epoch of training where I...
-//    Create batches from the dataset (shuffle the indexes)
-//    Predict, get loss, then step the optim
+
+    let n_batches = train_images.dim(0)? / BSIZE;
+    let mut batch_idxs = (0..n_batches).collect::<Vec<usize>>();
+
+    for epoch in 1..EPOCHS {
+        batch_idxs.shuffle(&mut thread_rng());
+        let mut sum_loss = 0f32;
+
+        for batch_idx in batch_idxs.iter() {
+            let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
+            let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;
+            let logits = model.forward(&train_images)?;
+            let log_sm = ops::log_softmax(&logits, D::Minus1)?;
+            let loss = loss::nll(&log_sm, &train_labels)?;
+            sgd.backward_step(&loss)?;
+            sum_loss += loss.to_vec0::<f32>()?;
+        }
+
+        let avg_loss = sum_loss / n_batches as f32;
+
+        let test_logits = model.forward(&test_images)?;
+        let sum_ok = test_logits
+            .argmax(D::Minus1)?
+            .eq(&test_labels)?
+            .to_dtype(DType::F32)?
+            .sum_all()?
+            .to_scalar::<f32>()?;
+        let test_accuracy = sum_ok / test_labels.dims1()? as f32;
+        println!(
+            "{epoch:4} train loss {:8.5} test acc: {:5.2}%",
+            avg_loss,
+            100. * test_accuracy
+        );
+    }
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Use Device::new_cuda(0)?; to use the GPU.
-    let device = Device::Cpu;
-
     // Load the dataset
     let dataset = get_mnist_dataset().unwrap();
 
-    let weight = Tensor::randn(0f32, 1.0, (100, 784), &device)?;
-    let bias = Tensor::rand(0f32, 1.0, (100,), &device)?;
-    let first = Linear::new(weight, Some(bias));
+    train_loop::<candle_tut::models::MLP>(dataset).unwrap();
 
-    let weight = Tensor::randn(0f32, 1.0, (10, 100), &device)?;
-    let bias = Tensor::randn(0f32, 1.0, (10,), &device)?;
-    let second = Linear::new(weight, Some(bias));
-    
-    //let model = candle_tut::models::MLP { first, second };
-
-    let dummy_image = Tensor::randn(0f32, 1.0, (1, 784), &device)?;
-
-    //let digit = model.forward(&dummy_image)?;
-    //println!("Digit {digit:?} digit");
     Ok(())
 }
