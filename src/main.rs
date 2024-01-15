@@ -1,5 +1,5 @@
-use candle_core::{Device, Tensor, DType, Var};
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_core::{Device, Tensor, DType};
+use candle_nn::{Linear, VarBuilder, VarMap, Optimizer};
 use candle_datasets::vision::Dataset;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use parquet::file::reader::SerializedFileReader;
@@ -71,21 +71,30 @@ fn get_mnist_dataset() -> Result<Dataset, Box<dyn std::error::Error>> {
     return Ok(mnist);
 }
 
-fn train_loop(
+fn train_loop<M: candle_tut::models::Model>(
     dataset: candle_datasets::vision::Dataset,
-    model: Box<dyn candle_tut::models::Model>
+    model: M
 ) -> Result<(), Box<dyn std::error::Error>> {
 //    See the example: https://github.com/huggingface/candle/blob/main/candle-examples/examples/mnist-training/main.rs#L174
     let device = Device::cuda_if_available(0)?;
 
+    const LR: f64 = 0.05;
+
     let train_labels = dataset.train_labels;
     let train_images = dataset.train_images.to_device(&device)?;
     let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&device)?;
-//    Here I'll need to create the optimizer and loss function
 
+    let mut varmap = VarMap::new();
+    let vs = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let model = M::new(vs.clone())?;
+//    Here I'll need to create the optimizer and loss function
+    let mut sgd = candle_nn::optim::SGD::new(varmap.all_vars(), LR );
+    let test_images = dataset.test_images.to_device(&device)?;
+    let test_labels = dataset.test_labels.to_dtype(DType::U32)?.to_device(&device)?;
 //    Then do each epoch of training where I...
 //    Create batches from the dataset (shuffle the indexes)
 //    Predict, get loss, then step the optim
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -103,11 +112,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bias = Tensor::randn(0f32, 1.0, (10,), &device)?;
     let second = Linear::new(weight, Some(bias));
     
-    let model = MLP { first, second };
+    //let model = candle_tut::models::MLP { first, second };
 
     let dummy_image = Tensor::randn(0f32, 1.0, (1, 784), &device)?;
 
-    let digit = model.forward(&dummy_image)?;
-    println!("Digit {digit:?} digit");
+    //let digit = model.forward(&dummy_image)?;
+    //println!("Digit {digit:?} digit");
     Ok(())
 }
