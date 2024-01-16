@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load the dataset
     let dataset = get_mnist_dataset().unwrap();
 
-    train_loop::<candle_tut::models::MLP>(dataset).unwrap();
+    train_loop::<candle_tut::models::CNN>(dataset).unwrap();
 
     Ok(())
 }
