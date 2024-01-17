@@ -1,12 +1,47 @@
 use candle_nn::{
-    Linear, Module, VarBuilder, Conv2d, ModuleT};
+    Linear, Module, VarBuilder, Conv2d, ModuleT, VarMap};
 use candle_core::{Tensor, Error};
+
+pub struct Config {
+    lr: f64,
+    load: Option<String>,
+    save: Option<String>,
+    epochs: usize,
+    train: bool,
+    batch_size: usize,
+}
+
+impl Config {
+    pub fn new(lr: f64, load: Option<String>, save: Option<String>,
+        epochs: usize, train: bool, batch_size: usize) -> Self {
+        Config {
+            lr: lr,
+            load: load,
+            save: save,
+            epochs: epochs,
+            train: train,
+            batch_size: batch_size,
+        }
+    }
+    pub fn get_lr(&self) -> f64 {
+        self.lr
+    }
+
+    pub fn get_num_epochs(&self) -> usize {
+        self.epochs
+    }
+
+    pub fn get_batch_size(&self) -> usize {
+        self.batch_size
+    }
+}
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
 
 pub trait Model : Sized {
-    fn forward(&self, input: &Tensor) -> Result<Tensor, Error>;
+    fn forward(&self, input: &Tensor, config: &Config) 
+        -> Result<Tensor, Error>;
     // TODO: Make this accept a config
     fn new(vars: VarBuilder) -> Result<Self, Error>;
 }
@@ -17,10 +52,21 @@ pub struct MLP {
 }
 
 impl Model for MLP {
-    fn forward(&self, input: &Tensor) -> Result<Tensor, Error> {
+    fn forward(&self, input: &Tensor, config: &Config) 
+        -> Result<Tensor, Error> {
+        let mut varmap = VarMap::new();
+        if let Some(load) = &config.load {
+            println!("loading weights from {load}");
+            varmap.load(load)?
+        }
         let x = self.first.forward(input)?;
         let x = x.relu()?;
-        self.second.forward(&x)
+        let x = self.second.forward(&x)?;
+        if let Some(save) = &config.save {
+            println!("saving trained weights in {save}");
+            varmap.save(save)?
+        }
+        Ok(x)
     }
 
     fn new(vars: VarBuilder) -> Result<Self, Error> {
@@ -54,10 +100,15 @@ impl Model for CNN {
             dropout,
         })
     }
-    fn forward(&self, xs: &Tensor) -> Result<Tensor, Error> {
+    fn forward(&self, xs: &Tensor, config: &Config) 
+        -> Result<Tensor, Error> {
         // Get the batch and image dimensions from the tensor
         let (b_sz, _img_dim) = xs.dims2()?;
-        let train: bool = true;
+        let mut varmap = VarMap::new();
+        if let Some(load) = &config.load {
+            println!("loading weights from {load}");
+            varmap.load(load)?
+        }
         let xs = xs
             .reshape((b_sz, 1, 28, 28))?
             .apply(&self.conv1)?
@@ -67,6 +118,11 @@ impl Model for CNN {
             .flatten_from(1)?
             .apply(&self.fc1)?
             .relu()?;
-        self.dropout.forward_t(&xs, train)?.apply(&self.fc2)
+        let x = self.dropout.forward_t(&xs, config.train)?.apply(&self.fc2)?;
+        if let Some(save) = &config.save {
+            println!("saving trained weights in {save}");
+            varmap.save(save)?
+        }
+        Ok(x)
     }
 }

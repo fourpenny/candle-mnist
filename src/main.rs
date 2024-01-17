@@ -75,13 +75,12 @@ fn get_mnist_dataset() -> Result<Dataset, Box<dyn std::error::Error>> {
 //  Train the input type of neural network to classify the given dataset.
 //  We also test the accuracy of the network at the end of each training epoch.
 fn train_loop<M: candle_tut::models::Model>(
-    dataset: candle_datasets::vision::Dataset
+    dataset: candle_datasets::vision::Dataset,
+    config: candle_tut::models::Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::cuda_if_available(0)?;
 
-    const LR: f64 = 0.05;
-    const EPOCHS: usize = 20;
-    const BSIZE: usize = 64;
+    let bsize: usize = config.get_batch_size();
 
     let train_labels = dataset.train_labels;
     let train_images = dataset.train_images.to_device(&device)?;
@@ -91,21 +90,21 @@ fn train_loop<M: candle_tut::models::Model>(
     let vs = VarBuilder::from_varmap(&varmap, DType::F32, &device);
     let model = M::new(vs.clone())?;
 
-    let mut sgd = candle_nn::optim::SGD::new(varmap.all_vars(), LR )?;
+    let mut sgd = candle_nn::optim::SGD::new(varmap.all_vars(), config.get_lr() )?;
     let test_images = dataset.test_images.to_device(&device)?;
     let test_labels = dataset.test_labels.to_dtype(DType::U32)?.to_device(&device)?;
 
-    let n_batches = train_images.dim(0)? / BSIZE;
+    let n_batches = train_images.dim(0)? / bsize;
     let mut batch_idxs = (0..n_batches).collect::<Vec<usize>>();
 
-    for epoch in 1..EPOCHS {
+    for epoch in 1..config.get_num_epochs() {
         batch_idxs.shuffle(&mut thread_rng());
         let mut sum_loss = 0f32;
 
         for batch_idx in batch_idxs.iter() {
-            let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
-            let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;
-            let logits = model.forward(&train_images)?;
+            let train_images = train_images.narrow(0, batch_idx * bsize, bsize)?;
+            let train_labels = train_labels.narrow(0, batch_idx * bsize, bsize)?;
+            let logits = model.forward(&train_images, &config)?;
             let log_sm = ops::log_softmax(&logits, D::Minus1)?;
             let loss = loss::nll(&log_sm, &train_labels)?;
             sgd.backward_step(&loss)?;
@@ -114,7 +113,7 @@ fn train_loop<M: candle_tut::models::Model>(
 
         let avg_loss = sum_loss / n_batches as f32;
 
-        let test_logits = model.forward(&test_images)?;
+        let test_logits = model.forward(&test_images, &config)?;
         let sum_ok = test_logits
             .argmax(D::Minus1)?
             .eq(&test_labels)?
@@ -135,7 +134,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load the dataset
     let dataset = get_mnist_dataset().unwrap();
 
-    train_loop::<candle_tut::models::CNN>(dataset).unwrap();
+    let config = candle_tut::models::Config::new(
+        0.05,
+        None,
+        None,
+        10,
+        true,
+        64
+    );
+
+    train_loop::<candle_tut::models::CNN>(dataset, config).unwrap();
 
     Ok(())
 }
